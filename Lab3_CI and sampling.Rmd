@@ -6,11 +6,15 @@ output: github_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
+library(terra)
+library(sf)
+library(tmap)
+library(knitr)
 ```
 
 ## Confidence intervals
 
-**Your name: {Name here}**
+**Your name: {Wil Gamble}**
 
 **Overview:**
 
@@ -45,6 +49,28 @@ In the first part of this lab, you'll determine a confidence interval for Washin
 
 ```{r Task1}
 
+Filtered_Washinton_era<-era5_data%>%
+  filter(st_name=="Washington")
+
+
+
+A_Washington_table<-Filtered_Washinton_era%>%
+  group_by(time_range)%>%
+  summarise(precipitation_mean=mean(prcp_m),
+            precipitation_sd=sd(prcp_m),
+            Sample_Size=n(),
+            se=precipitation_sd/sqrt(Sample_Size))
+
+z.score_upper=qnorm(0.975)
+z.score_lower=qnorm(0.025)
+
+B_Washington_table<-A_Washington_table%>% #could just combine but not how I did it
+  mutate(error=z.score_upper*se,
+         ci_high=precipitation_mean+error,
+         ci_low=precipitation_mean-error)
+
+  kable(B_Washington_table)
+
 ```
 
 Using the code provided in class, create a ggplot graphic that visualizes these two confidence intervals. You'll want to use `geom_point` and `geom_linerange` to do so. Use states as the y-axis and mean precipitation as the x axis. Vary the color and position of the dots and lines for the mean/CI by the `time_range` variable. Feel free to also experiment with axis labels/themes to make the graph more appealing and accessible.
@@ -52,12 +78,14 @@ Using the code provided in class, create a ggplot graphic that visualizes these 
 **Task 2** _Create a ggplot graphic as described above to show the confidence intervals for precipitation in Washington for each time range._
 
 ```{r Task3}
-
+ggplot(B_Washington_table%>%mutate(time_range=reorder(time_range,precipitation_mean)))+
+  geom_linerange(aes(xmin=ci_low,xmax=ci_high,y=time_range,group=time_range)) +
+  geom_point(aes(x=precipitation_mean,y=time_range))
 ```
 
 **Task 3** _Interpret your table and graph. What do they tell us about the change in Washington's precipitation during this time?_
 
-{Your response here.}
+{Precipitation rates have gone down overall even when looking at the confidence intervals. 05-24 is about 20% lower in precepition daily than 50-69. 05-24 had a tighter confidence interval, however. There must have been more variance in 1959-69.}
 
 # Part 2: Analyzing county data in Washington.
 In part 1, you ran a state level analysis. What if you wanted to identify where populations might be negatively affected by precipitation changes within a state? In this section, you'll look at the changes in precipitation **at county level** in Washington to 
@@ -66,24 +94,63 @@ To start with, adapt your code from step 1 so that you create confidence interva
 
 **Task 4** _Create a summary table for January precipitation in Washington counties for both time periods. Use the same approach as in Task 1, but calculate statistics for counties rather than the state as a whole. Call the head of your table with `kable` when you are done._
 
-```{r Task5}
+```{r Task4}
+Washington_counties<-Filtered_Washinton_era%>%
+  group_by(cty_name,time_range)%>%
+  summarise(precipitation_mean=mean(prcp_m),
+            precipitation_sd=sd(prcp_m),
+            Sample_Size=n(),
+            se=precipitation_sd/sqrt(Sample_Size))%>%
+   mutate(error=z.score_upper*se,
+         ci_high=precipitation_mean+error,
+         ci_low=precipitation_mean-error)
 
+
+kable(Washington_counties)
 ```
 
 **Task 5** _Visualize the confidence intervals for the county-level data you generated in task 4, using the same style as you did for Task 2 above. For an optional extra challenge, visually highlight the counties where the confidence intervals between time periods do NOT overlap._
 
-```{r Task6}
+```{r Task5}
+#You want the y axis to be counties
+
+ggplot(Washington_counties)+ #I tried to mutate this to get it in order of least to most, but I failed. 
+  geom_linerange(aes(xmin=ci_low,xmax=ci_high,y=cty_name,group=cty_name))+
+  geom_point(aes(x=precipitation_mean,y=cty_name))+
+geom_point(aes(x = precipitation_mean, y = cty_name,#I asked chatGPT how to add some color to this
+ color = time_range))
 
 ```
 
 **Task 6**: _Compare the size of the error terms for your county level data to the error terms at state level that you calculated in Task 1. Are they bigger or smaller? Explain why the formula you used for calculating the error terms produced error terms of different sizes. How is this difference visible in your ggplot graphs?_
 
-{Your response here.}
+{Some of the error terms within the counties are much larger than comparing the statewide trend. Mason County, for example, has an error close to 0.2. The statewide is within 0.02. The main reason the error is much greater in the county data is the number of observations. As observations go up, error decreases. MOE=1.96*(standard deviation/sqrt of observations). The difference between counties came from the differences in standard deviation. Some counties had wide gaps from the mean making the error larger. Adams county was centered around the mean, while Mason had a lot of variance.}
 
 **Task 7**: _Transform the county data from task 4 into wide format so that the means for each time period are in the same row for each county. Then calculate the change in precipitation between the time periods. Join this table to the geopackage file that contains county boundaries and census data, making sure that you only have Washington counties included - use the geopackage `data/acsdata_cty_westreg.gpkg`. Then use `tmap` to map out the difference in precipitation means across the two time periods. Make sure the legend of this map is interpretable._
 
 ```{r Task7}
 
+CBWashington_Counties_Wide<-Washington_counties%>%
+  select(precipitation_mean,time_range,cty_name)%>%
+  pivot_wider(names_from=time_range, 
+              values_from=precipitation_mean)%>%
+  mutate(precipitation_change=`1950-69`-`2005-24`)
+
+CBWashington_Counties_Wide<-CBWashington_Counties_Wide%>%
+  rename(`1950-69_prc_mean`=`1950-69`,
+         `2005-2024_prc_mean`=`2005-24`)#Asked chatGPT for the rename function. 
+
+ACS_dat<-st_read("data/acsdata_cty_westreg.gpkg")%>%
+  st_transform(4326)%>%
+  filter(st_name=="Washington")
+
+ACS_Washington<-ACS_dat%>%
+  left_join(CBWashington_Counties_Wide,by="cty_name")
+
+tm_shape(ACS_Washington)+
+  tm_polygons(fill="precipitation_change",
+    fill.scale=tm_scale_intervals(style = "jenks"),
+   fill.legend = tm_legend(title = "Difference in Mean precipitation (M): 1959-69 to 2005-24"))
 ```
 
 
@@ -126,8 +193,8 @@ In addition, describe two interesting trends you see in the figure you created.
 
 **Disclosure of assistance:** Besides class materials, what other sources of assistance did you use while completing this lab? These can include input from classmates, relevant material identified through web searches (e.g., Stack Overflow), or assistance from ChatGPT or other AI tools. How did these sources support your own learning in completing this lab?
 
-{Response here.}
+{I mostly used chatGPT for adding clarity to things in this lab. I used it to add color to the graph in task 4 for clarity. I also asked for the rename function. I am pretty sure another script covered rename, so I asked for a template. I actually tried to use it in task 4 to re-order the counties from most to least error using mutate. My mutate worked originally when I did not include the years. I tried altering the code by doing a second mutate using the years. That did not work, and I tried chatGPT. It also failed. }
 
 **Lab reflection:** How do you feel about the work you did on this lab? Was it easy, moderate, or hard? What are the biggest things you learned by completing it?
 
-{Your response here}
+{This lab followed very closely to script 15. The first 6 task were not bad at all. I had some trouble with task 7, but I mainly relied on script 10 to get through it. The whole joining section was based around code from 10. You can see from my naming, that it took me multiple iterations of "Wide_Washington" to be happy. I originally had an extremely round about way with new mutated columns that was not needed. I mainly learned about confidence intervals from class and the lab. I understand standard deviations, showing confidence with error bars, and how the mean matters for these now. I see how observations lowers error as well. I can interpret graphs better now for error. I see error bars a lot in herbicide efficasy graphs so this clarifies how they find them. "Big error" is not necissarily a bad thing. Could be from a small trial or their trial plants have a varried response.}
